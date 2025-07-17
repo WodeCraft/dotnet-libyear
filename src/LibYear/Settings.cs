@@ -1,5 +1,5 @@
-using System.ComponentModel;
 using Spectre.Console.Cli;
+using System.ComponentModel;
 
 namespace LibYear;
 
@@ -12,6 +12,10 @@ public class Settings : CommandSettings
 	[CommandOption("-u|--update")]
 	[Description("update any outdated packages")]
 	public bool Update { get; set; }
+
+	[CommandOption("-o|--output")]
+	[Description("the output format. Either json or mkd")]
+	public string? Output { get; set; }
 
 	[CommandOption("-q|--quiet")]
 	[Description("only output outdated packages")]

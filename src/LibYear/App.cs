@@ -1,5 +1,6 @@
 using LibYear.Core;
 using Spectre.Console;
+using System.Text.Json;
 
 namespace LibYear;
 
@@ -27,7 +28,7 @@ public class App
 		}
 
 		var result = await _checker.GetPackages(projects);
-		DisplayAllResultsTables(result, settings.QuietMode);
+		DisplayAllResultsTables(result, settings.QuietMode, settings.Output);
 
 		if (settings.Update)
 		{
@@ -44,21 +45,32 @@ public class App
 			: 0;
 	}
 
-	private void DisplayAllResultsTables(SolutionResult allResults, bool quietMode)
+	private void DisplayAllResultsTables(SolutionResult allResults, bool quietMode, string? outputFormat = "")
 	{
 		if (allResults.Details.Count == 0)
 			return;
 
 		int MaxLength(Func<Result, int> field)
 			=> allResults.Details.Max(results => results.Details.Count > 0 ? results.Details.Max(field) : 0);
-
 		var namePad = Math.Max("Package".Length, MaxLength(r => r.Name.Length));
 		var installedPad = Math.Max("Installed".Length, MaxLength(r => r.Installed?.Version.ToString().Length ?? 0));
 		var latestPad = Math.Max("Latest".Length, MaxLength(r => r.Latest?.Version.ToString().Length ?? 0));
+		var versionBehindPad = Math.Max("Ver behind".Length, MaxLength(r => r.VersionBehind.Length));
 
-		var width = allResults.Details.Max(r => r.ProjectFile.FileName.Length);
+		var width = allResults.Details.Max(r => r.ProjectFile.FileName.Length) + 10;
+		_console.Profile.Width = 150; // width;
 		foreach (var results in allResults.Details)
-			GetResultsTable(results, width, namePad, installedPad, latestPad, quietMode);
+			GetResultsTable(results, width, namePad, installedPad, latestPad, versionBehindPad, quietMode);
+
+		if (outputFormat is not null
+			&& outputFormat?.ToLowerInvariant() == "json")
+		{
+			var json = JsonSerializer.Serialize(allResults.Details, new JsonSerializerOptions
+			{
+				WriteIndented = true
+			});
+			File.WriteAllText("libyear.json", json);
+		}
 
 		if (allResults.Details.Count > 1)
 		{
@@ -66,16 +78,18 @@ public class App
 		}
 	}
 
-	private void GetResultsTable(ProjectResult results, int titlePad, int namePad, int installedPad, int latestPad, bool quietMode)
+	private void GetResultsTable(ProjectResult results,
+		int titlePad, int namePad, int installedPad, int latestPad,
+		int versionBehindPad, bool quietMode)
 	{
 		if (results.Details.Count == 0)
 			return;
 
-		var width = Math.Max(titlePad + 2, namePad + installedPad + latestPad + 48) + 2;
+		var width = Math.Max(titlePad + 2, namePad + installedPad + latestPad + versionBehindPad + 48) + 2;
 		var table = new Table
 		{
 			Title = new TableTitle($"  {results.ProjectFile.FileName}".PadRight(width)),
-			Caption = new TableTitle(($"  Project is {results.YearsBehind:F1} libyears behind").PadRight(width)),
+			Caption = new TableTitle(($"Project is {results.YearsBehind:F1} libyears behind. Average of {results.YearsBehind / results.Details.Count:F1} libyears").PadRight(width)),
 			Width = width
 		};
 		table.AddColumn(new TableColumn("Package").Width(namePad));
@@ -84,18 +98,33 @@ public class App
 		table.AddColumn(new TableColumn("Latest").Width(latestPad));
 		table.AddColumn(new TableColumn("Released"));
 		table.AddColumn(new TableColumn("Age (y)"));
+		table.AddColumn(new TableColumn("Pulse (y)").NoWrap());
+		table.AddColumn(new TableColumn("Ver behind").NoWrap());
 
-		foreach (var result in results.Details.Where(r => !quietMode || r.YearsBehind > 0))
+		Result? latestResult;
+		try
 		{
-			table.AddRow(
-				result.Name,
-				result.Installed?.Version.ToString() ?? string.Empty,
-				result.Installed?.Date.ToString("yyyy-MM-dd") ?? string.Empty,
-				result.Latest?.Version.ToString() ?? string.Empty,
-				result.Latest?.Date.ToString("yyyy-MM-dd") ?? string.Empty,
-				result.YearsBehind.ToString("F1")
-			);
+			foreach (var result in results.Details.Where(r => !quietMode || r.YearsBehind > 0))
+			{
+				latestResult = result;
+				table.AddRow(
+					result.Name,
+					result.Installed?.Version.ToString() ?? "N/A",
+					result.Installed?.Date.ToString("yyyy-MM-dd") ?? "N/A",
+					result.Latest?.Version.ToString() ?? "N/A",
+					result.Latest?.Date.ToString("yyyy-MM-dd") ?? "N/A",
+					result.YearsBehind.ToString("F1"),
+					result.Latest?.Pulse.ToString("F1") ?? "N/A",
+					string.IsNullOrWhiteSpace(result.VersionBehind) ? "N/A" : result.VersionBehind
+				);
+			}
 		}
+		catch (Exception ex)
+		{
+			var error = ex.Message;
+			throw;
+		}
+
 
 		if (quietMode && Math.Abs(results.YearsBehind) < double.Epsilon)
 		{
